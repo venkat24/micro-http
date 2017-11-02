@@ -56,12 +56,13 @@ int main() {
 			printf("The Client could not be connected");
 		}
 
-		// Send a "Hello World" response to the client
-		// TODO: This is currently an invalid HTTP Response
-		// Only for testing the socket connection
+		// Send a "Hello World" HTTP response to the client
 		recv(new_socket, buffer, bufsize, 0);
 		printf("%s\n", buffer);
-		write(new_socket, "Hello World\n", 12);
+		write(new_socket, "HTTP/1.1 200 OK\n", 16);
+		write(new_socket, "Content-length: 46\n", 19);
+		write(new_socket, "Content-Type: text/html\n\n", 25);
+		write(new_socket, "<html><body><H1>Hello world</H1></body></html>",46);
 		close(new_socket);
 	}
 	close(create_socket);

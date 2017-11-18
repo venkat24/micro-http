@@ -5,14 +5,15 @@
  * RFC 7231 (Hypertext Transfer Protocol (HTTP/1.1): Semantics and Content)
  */
 
-#include<netinet/in.h>
-#include<stdio.h>
-#include<stdlib.h>
-#include<string.h>
-#include<sys/socket.h>
-#include<sys/stat.h>
-#include<sys/types.h>
-#include<unistd.h>
+#include <netinet/in.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <dirent.h>
+#include <unistd.h>
 
 // Define a standard CRLF line ending
 #define EOL "\r\n"
@@ -20,6 +21,103 @@
 
 // Define a standard buffer allocation size
 #define BUFSIZE 1024
+
+// Define a large buffer allocation size
+#define BIGBUFSIZE 1024
+
+// Define a number of headers
+#define HEADERCOUNT 50
+
+#define WEBROOT "/home/venkat/bin/http-c"
+
+/**
+ * Structure to hold a header 
+ */
+struct header_frame {
+	char field[BUFSIZE];
+	char value[BUFSIZE];
+};
+
+/**
+ * Structure to hold a request
+ */
+struct request_frame {
+	// Request method - GET, POST, etc.
+	char* method;
+	// Location of the requested resource, like /home/index.html
+	char* resource;
+	// Protocol (Usually HTTP/1.1)
+	char* protocol;
+	// Body of the request
+	char* body;
+	// Number of headers
+	int header_count;
+	// A list of headers
+	struct header_frame headers[HEADERCOUNT];
+};
+
+/**
+ * Structure to hold a response
+ */
+struct response_frame {
+	// Protocol (Usally HTTP/1.1)
+	char* protocol;
+	// Status code - 200, 400, etc
+	int status_code;
+	// Response message - OK, NOT FOUND, etc
+	char* status_message;
+	// Number of headers
+	int header_count;
+	// A list of response headers
+	struct header_frame headers[HEADERCOUNT];
+	// Body of the response
+	char body[BIGBUFSIZE];
+};
+
+/**
+ * Structure of mapping from an extension to a MIME type
+ */
+typedef struct {
+    char *ext;
+    char *mimetype;
+} extn;
+
+/**
+ * A list of common file extensions and their MIME types
+ * TODO: Extend this list
+ */
+extn extensions[] ={
+	{"aiff", "audio/x-aiff"},
+	{"avi", "video/avi"},
+	{"bin", "application/octet-stream"},
+	{"bmp", "image/bmp"},
+	{"css", "text/css"},
+	{"c", "text/x-c"},
+	{"doc", "application/msword"},
+	{"gif", "image/gif" },
+	{"gz",  "image/gz"  },
+	{"htmls", "text/html"},
+	{"html","text/html" },
+	{"html", "text/html"},
+	{"ico", "image/ico"},
+	{"jpeg","image/jpeg"},
+	{"jpg", "image/jpg" },
+	{"js", "application/x-javascript"},
+	{"mp3", "audio/mpeg3"},
+	{"mpeg", "video/mpeg"},
+	{"mpg", "video/mpeg"},
+	{"md", "text/markdown"},
+	{"pdf","application/pdf"},
+	{"php", "text/html" },
+	{"png", "image/png" },
+	{"png", "image/png"},
+	{"rar","application/octet-stream"},
+	{"tar", "image/tar" },
+	{"tiff", "image/tiff"},
+	{"txt", "text/plain" },
+	{"xml", "application/xml"},
+	{"zip", "application/zip"}
+};
 
 /**
  * Helper function to throw an error
@@ -29,6 +127,16 @@
 void error(const char *msg) {
 	perror(msg);
 	exit(1);
+}
+
+/**
+ * Helper function to check if a given path points to a filename of a
+ * directory.
+ */
+int is_regular_file(const char *path) {
+	struct stat path_stat;
+	stat(path, &path_stat);
+	return S_ISREG(path_stat.st_mode);
 }
 
 /**
@@ -54,7 +162,7 @@ int bufrecv(int sockfd, char *buffer) {
 			eol_characters_matched = 0;
 		tempbuffer++;
 	}
-	error("Request format invalid: Unterminated request stream");
+	error("Request format invalid: Unterminated request line");
 	return 1;
 }
 
@@ -72,39 +180,35 @@ char* bufcpy(char* srcbuffer, size_t len) {
 }
 
 /**
- * Function to parse the HTTP request headers
- *
- * @param[in]     request
- * @return		  number of headers
+ * Helper function to get the extension, given the filename
  */
-int parse_headers(char* request) {
+const char *get_filename_ext(const char *filename) {
+	const char *dot = strrchr(filename, '.');
+	if(!dot || dot == filename) return "";
+	return dot + 1;
+}
+
+
+/**
+ * Function to parse the HTTP request headers and body
+ * Returns 1 if parsing successful
+ *
+ * @param[in]        request
+ * @param[out]       request_frame struct
+ * @return		     number of headers
+ */
+int parse_request(char* requestbuf, struct request_frame *request) {
 	// Create a temporary buffer to copy the request into
 	char *temprequest = malloc(BUFSIZE);
-	temprequest = bufcpy(request, BUFSIZE);
-
-	printf("--- REQUEST RECEIVED --- \n");
-
-	printf("\n%s", temprequest);
-
-	// Holds the main header parameters
-	// 0 - Request Type
-	// 1 - Resource requested
-	// 2 - Protocol (It's usually HTTP/1.1)
-	// The _save_buffer variables hold the result or the strtok split so that
-	// it can be accessed again
-	char* request_line[3];
-	char* request_line_save_buffer;
+	temprequest = bufcpy(requestbuf, BUFSIZE);
 
 	// Read the first line of the input, and split it into it's components
 	// The format for the first request line as per RFC 7230 is -
 	// [method] [request-target] [HTTP-version] CRLF
-	request_line[0] = strtok_r(temprequest, " \t\n", &request_line_save_buffer);
-	request_line[1] = strtok_r(NULL, " \t", &request_line_save_buffer);
-	request_line[2] = strtok_r(NULL, " \t\n", &request_line_save_buffer);
-	printf("Request Type     - %s\n", request_line[0]);
-	printf("Request Resource - %s\n", request_line[1]);
-	printf("Request Protocol - %s\n", request_line[2]);
-	printf("\nHEADERS : \n");
+	char* request_save_buffer;
+	request->method   = strtok_r(temprequest, " \t\n", &request_save_buffer);
+	request->resource = strtok_r(NULL, " \t", &request_save_buffer);
+	request->protocol = strtok_r(NULL, " \t\n", &request_save_buffer);
 
 	// Iterate through the remaining request headers.
 	// Buffers that store the current header being read
@@ -114,21 +218,32 @@ int parse_headers(char* request) {
 	char* current_token;
 	char* current_token_save_buffer;
 
-	// Count the number of headers in the request
+	// Store the headers as they're parsed
+	struct header_frame tempheader;
 	int header_count = 0;
 
+	// Flag to check if parsing headers is complete
+	int headers_complete_flag = 0;
+
 	// Copy the request into a temp for manipulation
-	temprequest = bufcpy(request, BUFSIZE);
+	temprequest = bufcpy(requestbuf, BUFSIZE);
 
 	// Iterate over the headers
-	for (int i=0;; temprequest = NULL, ++i) {
+	for (;; temprequest = NULL) {
+		// If all the headers have been parsed, only the request body is left
+		if (headers_complete_flag) {
+			request->body = current_header_save_buffer;
+			break;
+		}
+
 		// Read the current line of input
 		current_header =
 			strtok_r(temprequest, "\n", &current_header_save_buffer);
 
 		// Skip the first line. We've already parsed that
 		// TODO: This is kinda ugly. Fix it.
-		if (i == 0) {
+		if (header_count == 0) {
+			header_count++;
 			continue;
 		}
 
@@ -145,10 +260,10 @@ int parse_headers(char* request) {
 		if (current_token == NULL 
 			|| (strlen(current_token) == 1 && *current_token == EOL[0]))
 		{
-			printf("--- REQUEST COMPLETE --- \n\n");
-			break;
+			headers_complete_flag = 1;
+			continue;
 		}
-		printf("Header : %s\n", current_token);
+		strcpy(tempheader.field, current_token);
 
 		// Split the header value
 		current_token = strtok_r(NULL, "\n", &current_token_save_buffer);
@@ -159,10 +274,234 @@ int parse_headers(char* request) {
 			current_token++;
 		}
 
-		printf("Value  : %s\n\n", current_token);
+		strcpy(tempheader.value, current_token);
+		request->headers[header_count++] = tempheader;
 	}
 
-	return header_count;
+	request->header_count = header_count; 
+	return 1;
+}
+
+/**
+ * Takes a parsed request struct and prints it
+ *
+ * @param[in]   request_frame
+ */
+void print_request(const struct request_frame *request) {
+	// Pretty print the parsed request
+	printf("--- REQUEST RECEIVED --- \n");
+	printf("\nRequest Method   - %s", request->method);
+	printf("\nRequest Resource - %s", request->resource);
+	printf("\nRequest Protocol - %s", request->protocol);
+	printf("\n\nHEADERS : \n");
+
+	for(int i = 1; i < request->header_count; ++i) {
+		printf("Header : %s\n", request->headers[i].field);
+		printf("Value  : %s\n\n", request->headers[i].value);
+	}
+
+	printf("Body : %s\n", request->body);
+	printf("--- REQUEST COMPLETE ---\n\n");
+}
+
+/**
+ * Takes a parsed request and generates the response
+ */
+void response_generator(
+	const struct request_frame* req,
+	struct response_frame* res
+) {
+	// Set the response protocol
+	res->protocol = "HTTP/1.1";
+
+	// Initialize the number of headers
+	res->header_count = 0;
+
+	// Set the standard response unless otherwise
+	res->status_code = 200;
+	res->status_message = "OK";
+
+	// Check the request protocol field
+	if( ! (strcmp(req->protocol,"HTTP/1.1")
+		|| strcmp(req->protocol,"HTTP/1.0")) ) {
+		res->status_code = 400;
+		strcpy(res->status_message, "Bad Request");
+	}
+
+	// Determine the absolute path to the requested resource
+	char* resource_path = req->resource;
+	char* full_resource_path = malloc(BUFSIZE);
+	strcpy(full_resource_path, WEBROOT);
+	strcat(full_resource_path, resource_path);
+
+	// Check if the requested resource is a file, or a directory
+	if (is_regular_file(full_resource_path)) {
+		printf("Serving a File\n");
+		// If it's a file, read the contents and serve the file
+
+		// Find the file size, to set the Content-Lenth field
+		FILE *fresource = fopen(full_resource_path, "rb");
+		fseek(fresource, 0L, SEEK_END);
+		int file_size = ftell(fresource);
+		fclose(fresource);
+
+		// Find the extension of the file, and get it's MIME Type
+		// TODO: Replace this with a hashtable for improved performance
+		const char* this_extension;
+		this_extension = get_filename_ext(full_resource_path);
+
+		// Set the Content-Length header
+		char content_length[20];
+		sprintf(content_length, "%d", file_size);
+		// ^ Converting the integer into a string (hacky?)
+		strcpy(res->headers[res->header_count].field, "Content-Length");
+		strcpy(res->headers[res->header_count].value, content_length);
+		res->header_count++;
+
+		// Set the content type header. Find this from the extension.
+		// Iterate through the extensions list and break out when it's been
+		// matched. Copy over the corresponding MIME type
+		char mimetype[40];
+		int mime_set = 0;
+		for (int i = 0; i < sizeof(extensions)/sizeof(extn); ++i) {
+			if (!strcmp(extensions[i].ext, this_extension)) {
+				mime_set = 1;
+				strcpy(mimetype, extensions[i].mimetype);
+				break;
+			}
+		}
+		if (! mime_set) {
+			strcpy(mimetype, "application/octet-stream");
+		}
+		strcpy(res->headers[res->header_count].field, "Content-Type");
+		strcpy(res->headers[res->header_count].value, mimetype);
+		res->header_count++;
+	}
+	else {
+		printf("Serving a Directory\n");
+
+		/*// Set the Content-Length header*/
+		/*char content_length[10];*/
+		/*sprintf(content_length, "%d", strlen(response));*/
+		/*// ^ Converting the integer into a string (hacky?)*/
+		/*strcpy(res->headers[res->header_count].field, "Content-Length");*/
+		/*strcpy(res->headers[res->header_count].value, content_length);*/
+		/*res->header_count++;*/
+
+		/*strcpy(res->headers[res->header_count].field, "Content-Type");*/
+		/*strcpy(res->headers[res->header_count].value, "text/html");*/
+		/*res->header_count++;*/
+	}
+}
+
+void send_response(
+	int sockfd,
+	const struct request_frame* req,
+	const struct response_frame* res
+) {
+
+	// Set the first status line
+	char* header_line = malloc(BUFSIZE);
+	sprintf(
+		header_line, "%s %d %s\n",
+		res->protocol,
+		res->status_code,
+		res->status_message
+	);
+	write(sockfd, header_line, strlen(header_line));
+
+	// Write the headers
+	// Iterate through the headers, sprintf them into the right format, store
+	// them in the temp, and write them to the stream
+	char* header = malloc(BUFSIZE);
+	for(int i=0; i < res->header_count; ++i ) {
+		sprintf(
+			header,
+			"%s: %s\n",
+			res->headers[i].field,
+			res->headers[i].value
+		);
+		printf("%s\n", header);
+		write(sockfd, header, strlen(header));
+	}
+
+	// Write a newline to separate the headers and the body
+	write(sockfd, "\n", 1);
+
+	// Write the response body
+	// Determine the absolute path to the requested resource
+	char* resource_path = req->resource;
+	char* full_resource_path = malloc(BUFSIZE);
+	strcpy(full_resource_path, WEBROOT);
+	strcat(full_resource_path, resource_path);
+
+	// If it's not a regular file, it's a directory
+	// Serve an index page with a file listing
+	if (is_regular_file(full_resource_path)) {
+		// Allocate and assign the main response body
+		// This opens the requested resource and assigns it onto the body buffer
+		char response_buffer[BIGBUFSIZE];
+
+		// Render the file
+		FILE *fresource = fopen(full_resource_path, "rb");
+		int nread = 0;
+		// Read the file in chunks, and write them to the stream
+		if (fresource) {
+			while(nread = fread(response_buffer, 1, BIGBUFSIZE, fresource)){
+				write(sockfd, response_buffer, sizeof(response_buffer));
+			}
+			write(sockfd, EOL, EOLSIZE);
+		} else {
+			error("FILE INVALID!");
+		}
+		fclose(fresource);
+	}
+	else {
+		// It's a directory. Display a file listing.
+		// Initialize directory check parameters
+		DIR *directory;
+		struct dirent *dir_struct;
+		char current_line[BIGBUFSIZE];
+		char* dirtemp = malloc(BIGBUFSIZE);
+		char* resource_path_ptr = malloc(BIGBUFSIZE);
+		directory = opendir(full_resource_path);
+
+		// Begin rendering the HTML for the file listing
+		strcpy(current_line, "<html><body><h1>File Listing</h1><ul>");
+		write(sockfd, current_line, strlen(current_line));
+		if (directory) {
+			resource_path_ptr = resource_path;
+			if (!strcmp(resource_path_ptr, "/")) {
+				strcpy(resource_path_ptr, "");
+			}
+			while(*resource_path_ptr == '/') {
+				printf("INSIDE\n");
+				resource_path_ptr++;
+			}
+			while ((dir_struct = readdir(directory)) != NULL) {
+				strcpy(dirtemp, dir_struct->d_name);
+				if (!strcmp(dirtemp, ".")
+				 || !strcmp(dirtemp, "..")) {
+					continue;
+				}
+				while(*dirtemp == '/') {
+					printf("INSIDE\n");
+					dirtemp++;
+				}
+				if(!strlen(resource_path_ptr)) {
+					sprintf(current_line, "<a href=\"%s/%s\"><li>%s</li></a>", resource_path_ptr, dirtemp, dirtemp);
+				}
+				else {
+					sprintf(current_line, "<a href=\"/%s/%s\"><li>%s</li></a>", resource_path_ptr, dirtemp, dirtemp);
+
+				}
+				write(sockfd, current_line, strlen(current_line));
+			}
+			closedir(directory);
+		}
+		strcpy(current_line, "</ul></body></html>");
+		write(sockfd, current_line, strlen(current_line));
+	}
 }
 
 /**
@@ -172,20 +511,23 @@ int parse_headers(char* request) {
  * @param[in]     sockfd
  */
 int handler(int sockfd) {
-	// Send a "Hello World" HTTP response to the client
+	// Allocate buffers to read the request
 	char *request = malloc(BUFSIZE);
-	char *response = malloc(BUFSIZE);
+	struct request_frame req;
+	struct response_frame res;
 
-	/*bufrecv(sockfd, request);*/
+	// Read request from socket
 	recv(sockfd, request, BUFSIZE, 0);
 
-	parse_headers(request);
+	// Parse the request and print to stdout
+	if (parse_request(request, &req)) {
+		print_request(&req);
+	}
 
-	write(sockfd, "HTTP/1.1 200 OK\n", 16);
-	write(sockfd, "Content-length: 46\n", 19);
-	write(sockfd, "Content-Type: text/html\n\n", 25);
-	strcpy(response, "<html><body><H1>Hello world</H1></body></html>\r\n");
-	write(sockfd, response, strlen(response));
+	// Populate the response struct
+	response_generator(&req, &res);
+	send_response(sockfd, &req, &res);
+
 	return 1;
 }
 
@@ -195,9 +537,12 @@ int handler(int sockfd) {
 int main(int argc, char* argv[]) {
 	// If the user does not specify a port, point out application usage
 	if (argc < 2) {
-		fprintf(stderr, "usage : server [port]");
+		fprintf(stderr, "usage : server [port]\n");
 		return 1;
 	}
+	// Useful for debugging. Flushes stdout pipe, without any buffering
+	// TODO: Remove this later
+	setbuf(stdout, NULL);
 
 	// Create a socket
 	int sockfd, respsockfd;
@@ -222,7 +567,7 @@ int main(int argc, char* argv[]) {
 	if (bind(sockfd, (struct sockaddr *) &address, sizeof(address)) == 0){
 		printf("Server started! Listening on port %d\n", port);
 	} else {
-		error("Error opening connection");
+		error("Error opening connection\n");
 	}
 
 	// Begin listen loop
@@ -242,7 +587,7 @@ int main(int argc, char* argv[]) {
 		// Spawns a child process which handles the request
 		int pid = fork();
 		if (pid < 0) {
-			error("Could not initialize response process");
+			error("Could not initialize response process\n");
 		}
 
 		// If child process, close the request socket, and initiate the

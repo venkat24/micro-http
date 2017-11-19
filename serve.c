@@ -1,13 +1,12 @@
 /**
- * @file server.c
- * A minimal HTTP/1.1 static file server. Built in accordance with :
- * RFC 7230 (Hypertext Transfer Protocol (HTTP/1.1): Message Syntax and Routing)
- * RFC 7231 (Hypertext Transfer Protocol (HTTP/1.1): Semantics and Content)
+ * @file serve.c
+ * A minimal HTTP/1.1 static file server.
  */
 
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -28,7 +27,8 @@
 // Define a number of headers
 #define HEADERCOUNT 50
 
-#define WEBROOT "/home/venkat/bin/http-c"
+// Fix the locaation from which the files are served
+char WEBROOT[256];
 
 /**
  * Structure to hold a header 
@@ -70,8 +70,6 @@ struct response_frame {
 	int header_count;
 	// A list of response headers
 	struct header_frame headers[HEADERCOUNT];
-	// Body of the response
-	char body[BIGBUFSIZE];
 };
 
 /**
@@ -122,7 +120,7 @@ extn extensions[] ={
 /**
  * Helper function to throw an error
  *
- * @param[in]     error_message
+ * @param[in]     error_message    error message to print before exit
  */
 void error(const char *msg) {
 	perror(msg);
@@ -132,6 +130,8 @@ void error(const char *msg) {
 /**
  * Helper function to check if a given path points to a filename of a
  * directory.
+ *
+ * @param[in]     path      path to determine of file or directory
  */
 int is_regular_file(const char *path) {
 	struct stat path_stat;
@@ -140,37 +140,10 @@ int is_regular_file(const char *path) {
 }
 
 /**
- * Helper function to manually populate the request buffer. Reads from the
- * stream until the EOL character is reached, and returns the new populated
- * buffer. EOL character is a CRLF
- *
- * @param[in]       sockfd
- * @param[inout]    buffer
- */
-int bufrecv(int sockfd, char *buffer) {
-	char *tempbuffer = buffer;
-	int eol_characters_matched = 0;
-	while (recv(sockfd, tempbuffer, 1, 0) != 0) {
-		if (*tempbuffer == EOL[eol_characters_matched]) {
-			eol_characters_matched++;
-			if (eol_characters_matched == EOLSIZE) {
-				*(tempbuffer+1-EOLSIZE) = '\0';
-				return (strlen(buffer));
-			}
-		}
-		else
-			eol_characters_matched = 0;
-		tempbuffer++;
-	}
-	error("Request format invalid: Unterminated request line");
-	return 1;
-}
-
-/**
  * A helper function to copy contents of one buffer into another
  * An alternative to strcpy()
  *
- * @param[in]       srcbuffer
+ * @param[in]       srcbuffer  buffer to create copy of
  * @param[in]       len        length of the buffer
  */
 char* bufcpy(char* srcbuffer, size_t len) {
@@ -193,9 +166,8 @@ const char *get_filename_ext(const char *filename) {
  * Function to parse the HTTP request headers and body
  * Returns 1 if parsing successful
  *
- * @param[in]        request
- * @param[out]       request_frame struct
- * @return		     number of headers
+ * @param[in]        request                 request bytes
+ * @param[out]       request_frame struct    output parsed request
  */
 int parse_request(char* requestbuf, struct request_frame *request) {
 	// Create a temporary buffer to copy the request into
@@ -278,7 +250,9 @@ int parse_request(char* requestbuf, struct request_frame *request) {
 		request->headers[header_count++] = tempheader;
 	}
 
-	request->header_count = header_count; 
+	request->header_count = header_count;
+
+	free(temprequest);
 	return 1;
 }
 
@@ -306,6 +280,9 @@ void print_request(const struct request_frame *request) {
 
 /**
  * Takes a parsed request and generates the response
+ *
+ * @param[in]    request_frame    the parsed request struct
+ * @param[out]   response_frame   output parsed response struct
  */
 void response_generator(
 	const struct request_frame* req,
@@ -336,7 +313,6 @@ void response_generator(
 
 	// Check if the requested resource is a file, or a directory
 	if (is_regular_file(full_resource_path)) {
-		printf("Serving a File\n");
 		// If it's a file, read the contents and serve the file
 
 		// Find the file size, to set the Content-Lenth field
@@ -377,23 +353,16 @@ void response_generator(
 		strcpy(res->headers[res->header_count].value, mimetype);
 		res->header_count++;
 	}
-	else {
-		printf("Serving a Directory\n");
-
-		/*// Set the Content-Length header*/
-		/*char content_length[10];*/
-		/*sprintf(content_length, "%d", strlen(response));*/
-		/*// ^ Converting the integer into a string (hacky?)*/
-		/*strcpy(res->headers[res->header_count].field, "Content-Length");*/
-		/*strcpy(res->headers[res->header_count].value, content_length);*/
-		/*res->header_count++;*/
-
-		/*strcpy(res->headers[res->header_count].field, "Content-Type");*/
-		/*strcpy(res->headers[res->header_count].value, "text/html");*/
-		/*res->header_count++;*/
-	}
+	free(full_resource_path);
 }
 
+/**
+ * Function to send back response through socket
+ *
+ * param[in]      sockfd           the socket to send the response through
+ * param[in]      request_frame    the request information object
+ * param[in]      response_frame   the response information object
+ */
 void send_response(
 	int sockfd,
 	const struct request_frame* req,
@@ -502,13 +471,17 @@ void send_response(
 		strcpy(current_line, "</ul></body></html>");
 		write(sockfd, current_line, strlen(current_line));
 	}
+
+	free(header);
+	free(header_line);
+	free(full_resource_path);
 }
 
 /**
  * HTTP Handler
- * Reads input bytes from the request socket and responds
+ * Handles a single request.
  *
- * @param[in]     sockfd
+ * @param[in]     sockfd     socket to write response to
  */
 int handler(int sockfd) {
 	// Allocate buffers to read the request
@@ -537,12 +510,13 @@ int handler(int sockfd) {
 int main(int argc, char* argv[]) {
 	// If the user does not specify a port, point out application usage
 	if (argc < 2) {
-		fprintf(stderr, "usage : server [port]\n");
+		fprintf(stderr, "usage : server port [webroot]\n");
 		return 1;
 	}
-	// Useful for debugging. Flushes stdout pipe, without any buffering
-	// TODO: Remove this later
+	// Useful for debugging. Flushes stdout, without any buffering
 	setbuf(stdout, NULL);
+
+	strcpy(WEBROOT, getenv("PWD"));
 
 	// Create a socket
 	int sockfd, respsockfd;
@@ -556,8 +530,6 @@ int main(int argc, char* argv[]) {
 
 	// Set binding parameters
 	int port = atoi(argv[1]);
-	char *root;
-	root = getenv("PWD");
 
 	address.sin_family = AF_INET;
 	address.sin_addr.s_addr = INADDR_ANY;

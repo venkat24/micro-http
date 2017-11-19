@@ -1,10 +1,9 @@
-# http-c
+# micro-http
 
-Minimal implementation of the HTTP/1.1 protocol as per RFC 7230, 7231 and 7232
+A tiny static file server written in C, wiith functionality similar to Python's SimpleHTTPServer. Presents a file listing for directories.
 
-Run with :
+* Build by running `make`.
 
-	gcc server.c
-	./a.out 8000
+* Add `serve` to your `$PATH`. 
 
-Visit localhost:8000
+* Run `serve 9000` to serve the current working directory. Visit localhost:9000.

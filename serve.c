@@ -261,7 +261,7 @@ int parse_request(char* requestbuf, struct request_frame *request) {
  *
  * @param[in]   request_frame
  */
-void print_request(const struct request_frame *request) {
+void print_request_verbose(const struct request_frame *request) {
 	// Pretty print the parsed request
 	printf("--- REQUEST RECEIVED --- \n");
 	printf("\nRequest Method   - %s", request->method);
@@ -276,6 +276,16 @@ void print_request(const struct request_frame *request) {
 
 	printf("Body : %s\n", request->body);
 	printf("--- REQUEST COMPLETE ---\n\n");
+}
+
+/**
+ * Takes a parsed request struct and prints it (sparse)
+ *
+ * @param[in]   request_frame
+ */
+void print_request_sparse(const struct request_frame *request) {
+	printf("\n%s %s %s",
+	    request->method, request->resource, request->protocol);
 }
 
 /**
@@ -390,7 +400,6 @@ void send_response(
 			res->headers[i].field,
 			res->headers[i].value
 		);
-		printf("%s\n", header);
 		write(sockfd, header, strlen(header));
 	}
 
@@ -444,7 +453,6 @@ void send_response(
 				strcpy(resource_path_ptr, "");
 			}
 			while(*resource_path_ptr == '/') {
-				printf("INSIDE\n");
 				resource_path_ptr++;
 			}
 			while ((dir_struct = readdir(directory)) != NULL) {
@@ -454,7 +462,6 @@ void send_response(
 					continue;
 				}
 				while(*dirtemp == '/') {
-					printf("INSIDE\n");
 					dirtemp++;
 				}
 				if(!strlen(resource_path_ptr)) {
@@ -494,7 +501,8 @@ int handler(int sockfd) {
 
 	// Parse the request and print to stdout
 	if (parse_request(request, &req)) {
-		print_request(&req);
+		// print_request_verbose(&req);
+		print_request_sparse(&req);
 	}
 
 	// Populate the response struct
